@@ -19,6 +19,7 @@ This project was developed by Fabian Boni to help students efficiently process e
 - Python 3.8 or higher
 - FFmpeg (required for audio processing)
 - OpenAI API key
+- CUDA (required for GPU acceleration)
 
 ### Installing FFmpeg on Windows with Chocolatey
 The easiest way to install FFmpeg on Windows is using Chocolatey:
@@ -37,6 +38,17 @@ Verify the installation by opening a new command prompt and typing:
 ```powershell
 ffmpeg -version
 ```
+
+### Installing CUDA
+To enable GPU acceleration, install NVIDIA CUDA:
+
+1. Download the latest CUDA Toolkit from the official NVIDIA website:  
+   [https://developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads)
+2. Follow the installation instructions for your operating system.
+3. Verify the installation by running:
+   ```bash
+   nvcc --version
+   ```
 
 ### Setting up the Application
 Clone the repository:
