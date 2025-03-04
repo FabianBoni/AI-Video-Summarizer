@@ -19,17 +19,37 @@ class VideoSummarizer:
         pdf = FPDF()
         pdf.add_page()
         
+        # Clean text function to handle Unicode characters
+        def clean_text(text):
+            # Replace problematic characters with their closest ASCII equivalents
+            text = text.replace('\u201e', '"')  # German opening quote
+            text = text.replace('\u201c', '"')  # Opening double quote
+            text = text.replace('\u201d', '"')  # Closing double quote
+            text = text.replace('\u2018', "'")  # Opening single quote
+            text = text.replace('\u2019', "'")  # Closing single quote
+            text = text.replace('\u2013', '-')  # En dash
+            text = text.replace('\u2014', '--')  # Em dash
+            text = text.replace('\u2026', '...')  # Ellipsis
+            text = text.replace('\u00a0', ' ')  # Non-breaking space
+            
+            # Filter out any remaining characters not in latin-1
+            return ''.join(c if ord(c) < 256 else '?' for c in text)
+        
+        # Clean the title and summary
+        clean_title = clean_text(title)
+        clean_summary = clean_text(summary)
+        
         # Add title
         pdf.set_font("Arial", "B", 16)
-        pdf.cell(0, 10, txt=title, ln=True, align="C")
+        pdf.cell(0, 10, txt=clean_title, ln=True, align="C")
         pdf.ln(10)
         
         # Add summary text
         pdf.set_font("Arial", "", 12)
-        pdf.multi_cell(0, 10, summary)
+        pdf.multi_cell(0, 10, clean_summary)
         
-        # Return the PDF as bytes
-        pdf_bytes = pdf.output(dest="S").encode("latin1")
+        # Return the PDF as bytes with error handling for encoding
+        pdf_bytes = pdf.output(dest="S").encode("latin1", errors="replace")
         return pdf_bytes
 
     def download_video(self, url, progress_callback=None):
@@ -407,7 +427,7 @@ def main():
 
     with col2:
         st.markdown('<div class="sub-header">Summary Output</div>', unsafe_allow_html=True)
-          # Display summary if available
+        # Display summary if available
         if 'summary' in st.session_state:
             st.markdown(f"### {st.session_state.title}")
             st.markdown('<div class="summary-container">', unsafe_allow_html=True)
@@ -422,32 +442,32 @@ def main():
                 mime="text/plain"
             )
         
-            # Create and download PDF version
-            pdf_bytes = summarizer.create_pdf(st.session_state.summary, st.session_state.title)
+            # Create a new summarizer instance specifically for PDF creation
+            pdf_summarizer = VideoSummarizer(api_key=api_key)
+            pdf_bytes = pdf_summarizer.create_pdf(st.session_state.summary, st.session_state.title)
             st.download_button(
                 label="Download Summary as PDF",
                 data=pdf_bytes,
                 file_name=f"{st.session_state.title.replace(' ', '_')[:50]}_summary.pdf",
                 mime="application/pdf"
             )
-        else:
-            st.info("Enter a video URL and click 'Summarize Video' to generate a summary.")
+        else:            st.info("Enter a video URL and click 'Summarize Video' to generate a summary.")
 
-            # Show example summary format
-            with st.expander("See example summary"):
-                st.markdown("""
-                # Example Video Title
-            
-                ## Main Concepts
-                * Key concept 1: explanation and details
-                * Key concept 2: explanation and details
-            
-                ## Important Points
-                1. First major point discussed in the video
-                2. Second major point with examples
-            
-                ## Summary
-                A concise overview of the video content...
-                """)
+        # Show example summary format
+        with st.expander("See example summary"):
+            st.markdown("""
+            # Example Video Title
+        
+            ## Main Concepts
+            * Key concept 1: explanation and details
+            * Key concept 2: explanation and details
+        
+            ## Important Points
+            1. First major point discussed in the video
+            2. Second major point with examples
+        
+            ## Summary
+            A concise overview of the video content...
+            """)
 if __name__ == "__main__":
     main()
