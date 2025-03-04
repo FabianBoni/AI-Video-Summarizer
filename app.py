@@ -15,7 +15,7 @@ class VideoSummarizer:
         self.whisper_model = None  # Will load on demand to save memory
         self.client = OpenAI(api_key=api_key)
 
-    def create_pdf(summary, title):
+    def create_pdf(self, summary, title):
         pdf = FPDF()
         pdf.add_page()
         
@@ -26,7 +26,6 @@ class VideoSummarizer:
         
         # Add summary text
         pdf.set_font("Arial", "", 12)
-        # Split the summary into lines if needed
         pdf.multi_cell(0, 10, summary)
         
         # Return the PDF as bytes
