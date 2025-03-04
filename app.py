@@ -379,19 +379,20 @@ def main():
                         transcribe_progress.progress(i + 1)
 
                     # Summarize content
-                    st.write("Generating summary...")
-                    summary_progress = st.progress(0)
-                    for i in range(100):
-                        time.sleep(0.02)  # Simulate progress during summarization
-                        summary_progress.progress(i + 1)
-                        summary = summarizer.summarize_text(
-                            transcript, 
-                            title, 
-                            format_type=format_code,
-                            language=language_code
-                        )
-
-                    status.update(label="Processing complete!", state="complete")
+                st.write("Generating summary...")
+                summary_progress = st.progress(0)
+                # Simulate progress while the summary is being generated.
+                for i in range(100):
+                    time.sleep(0.02)
+                    summary_progress.progress(i + 1)
+                # Generate the summary only once after progress completes.
+                summary = summarizer.summarize_text(
+                        transcript, 
+                        title, 
+                        format_type=format_code,
+                        language=language_code
+                )
+                status.update(label="Processing complete!", state="complete")
                 # Store the result in session state for display
                 st.session_state.summary = summary
                 st.session_state.title = title

@@ -1,5 +1,5 @@
 streamlit
 yt-dlp
 openai
-whisper
+openai-whisper
 pydub
