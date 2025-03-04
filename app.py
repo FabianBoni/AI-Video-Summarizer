@@ -6,7 +6,7 @@ import yt_dlp
 import whisper
 from openai import OpenAI
 from pydub import AudioSegment
-import concurrent.futures
+from fpdf import FPDF
 
 class VideoSummarizer:
     def __init__(self, api_key):
@@ -14,6 +14,24 @@ class VideoSummarizer:
         self.temp_dir = tempfile.mkdtemp()
         self.whisper_model = None  # Will load on demand to save memory
         self.client = OpenAI(api_key=api_key)
+
+    def create_pdf(summary, title):
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Add title
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, txt=title, ln=True, align="C")
+        pdf.ln(10)
+        
+        # Add summary text
+        pdf.set_font("Arial", "", 12)
+        # Split the summary into lines if needed
+        pdf.multi_cell(0, 10, summary)
+        
+        # Return the PDF as bytes
+        pdf_bytes = pdf.output(dest="S").encode("latin1")
+        return pdf_bytes
 
     def download_video(self, url, progress_callback=None):
         """Download video from URL using yt-dlp with enhanced error handling"""
@@ -77,45 +95,54 @@ class VideoSummarizer:
         return result["text"]
     
     def summarize_text(self, text, title, format_type="bullet_points", language="en"):
-        """Summarize text using OpenAI GPT with parallel processing and live output"""
+        """Summarize text using OpenAI GPT with multiple calls: first to break down the transcript and then to produce detailed study notes."""
         import concurrent.futures
         import queue
-        
+
         # Create a placeholder for live updates
         live_output_placeholder = st.empty()
-        
+
         chunk_size = 4000
         chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-        
-        # Set language-specific prompts
+
+        # Set language-specific prompts for the first summarization step
         if language == "en":
-            system_prompt = "You are an academic assistant that creates detailed summaries of educational content. Include key concepts, examples, and main points with thorough explanations."
+            system_prompt = ("You are an academic assistant that summarizes lecture transcripts. "
+                            "Highlight both what was shown and add interpretations that help students learn.")
             format_instruction = "bullet points" if format_type == "bullet_points" else "continuous paragraphs"
-            user_prompt = f"Create a detailed academic summary of this lecture transcript, organized with {format_instruction}. Include all key concepts, examples, and important information WITH DETAILED EXPLANATIONS for each point: "
-            final_system_prompt = "You are an academic assistant that creates detailed study guides."
-            final_user_prompt = f"Create a comprehensive study guide based on these summaries of '{title}'. Include main topics, key points, definitions, with thorough explanations. Organize with {format_instruction}: "
-        else:  # German
-            system_prompt = "Du bist ein akademischer Assistent, der detaillierte Zusammenfassungen von Bildungsinhalten erstellt. Füge Schlüsselkonzepte, Beispiele und Hauptpunkte mit umfassenden Erklärungen hinzu."
+            user_prompt = (f"Create a detailed academic summary of this lecture transcript. "
+                        f"Focus on the key points and explain the concepts in a way that helps students create study notes. "
+                        f"Organize the summary with {format_instruction}: ")
+            # Second, follow-up prompt to further develop detailed study notes for learning
+            followup_system_prompt = ("You are an academic mentor. Based on the summary provided, "
+                                    "elaborate detailed study notes detailing why each point is important for learning, "
+                                    "including examples, definitions, and methods to remember the content.")
+            followup_user_prompt = f"Based on the following summary of '{title}', create comprehensive, detailed study notes:\n"
+        else:  # German version
+            system_prompt = ("Du bist ein akademischer Assistent, der Vortragsmanuskripte zusammenfasst. "
+                            "Hebe sowohl die gezeigten Inhalte hervor als auch Interpretationen, die dem Lernen helfen.")
             format_instruction = "Aufzählungspunkte" if format_type == "bullet_points" else "fortlaufende Absätze"
-            user_prompt = f"Erstelle eine detaillierte akademische Zusammenfassung dieses Vortragsmanuskripts, organisiert mit {format_instruction}. Füge alle Schlüsselkonzepte, Beispiele und wichtige Informationen MIT DETAILLIERTEN ERKLÄRUNGEN für jeden Punkt hinzu: "
-            final_system_prompt = "Du bist ein akademischer Assistent, der detaillierte Studienleitfäden erstellt."
-            final_user_prompt = f"Erstelle einen umfassenden Studienleitfaden basierend auf diesen Zusammenfassungen von '{title}'. Füge Hauptthemen, Schlüsselpunkte, Definitionen mit ausführlichen Erklärungen hinzu. Organisiere mit {format_instruction}: "
-        
-        # Thread-safe communication channel
+            user_prompt = (f"Erstelle eine detaillierte akademische Zusammenfassung dieses Vortragsmanuskripts. "
+                        f"Fokussiere auf die wichtigsten Punkte und erläutere die Konzepte so, dass sie als Lernnotizen dienen können. "
+                        f"Organisiere die Zusammenfassung mit {format_instruction}: ")
+            followup_system_prompt = ("Du bist ein akademischer Mentor. Basierend auf der Zusammenfassung, "
+                                    "erarbeite detaillierte Lernnotizen, in denen du erklärst, warum die einzelnen Punkte wichtig sind, "
+                                    "mit Beispielen, Definitionen und Methoden zum besseren Einprägen des Inhalts.")
+            followup_user_prompt = f"Erstelle auf Grundlage der folgenden Zusammenfassung von '{title}' umfassende Lernnotizen:\n"
+
+        # Thread-safe communication channel for first stage
         result_queue = queue.Queue()
         results = [None] * len(chunks)
-        completed_count = 0
-        
-        # Initial display
+
         live_output_placeholder.markdown(f"""
         ## Starting: {title}
         Processing chunks: 0/{len(chunks)} completed
         
         <div class="summary-container">
-        Generating summary...
+        Generating initial summary...
         </div>
         """, unsafe_allow_html=True)
-        
+
         # Function to process each chunk (runs in worker threads)
         def process_chunk(chunk, index):
             max_retries = 3
@@ -129,37 +156,30 @@ class VideoSummarizer:
                         ],
                         max_tokens=1500
                     )
-                    # Put result in queue for main thread to process
                     result_queue.put((index, response.choices[0].message.content))
                     return
                 except Exception as e:
                     if attempt == max_retries - 1:
                         result_queue.put((index, f"Error processing chunk {index+1}: {str(e)}"))
                         return
-                    time.sleep(2)  # Wait before retrying
-        
-        # Launch processing threads
+                    time.sleep(2)
+
+        # Launch processing threads for the first stage
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            # Submit all tasks
             futures = [executor.submit(process_chunk, chunk, i) for i, chunk in enumerate(chunks)]
             
-            # Process results from the queue in the main thread
             completed = 0
             while completed < len(chunks):
                 try:
-                    # Get content from queue
                     index, content = result_queue.get(timeout=0.5)
                     results[index] = content
                     completed += 1
-                    
-                    # Build a completely fresh display each time
                     display_parts = []
                     for i, result in enumerate(results):
                         if result:
                             display_parts.append(f"### Part {i+1}:\n{result}")
                     
-                    # Complete replacement of previous content
-                    live_output_placeholder.empty()  # Clear the previous content first
+                    live_output_placeholder.empty()
                     live_output_placeholder.markdown(f"""
                     ## In Progress: {title}
                     Processing chunks: {completed}/{len(chunks)} completed
@@ -170,38 +190,32 @@ class VideoSummarizer:
                     """, unsafe_allow_html=True)
                     
                 except queue.Empty:
-                    # No results yet, continue checking
-                    continue            
-            # Wait for all futures to complete
+                    continue
             concurrent.futures.wait(futures)
         
-        # Combine all results (filtered for None values)
         valid_results = [r for r in results if r and not r.startswith("Error")]
-        full_summary = "\n\n".join(valid_results)
+        initial_summary = "\n\n".join(valid_results)
         
-        # Update display for final summarization step
         live_output_placeholder.markdown(f"""
-        ## Finalizing: {title}
-        Creating comprehensive study guide from individual summaries...
+        ## Finalizing Initial Summary: {title}
+        Preparing detailed study notes...
         
         <div class="summary-container">
-        {full_summary}
+        {initial_summary}
         </div>
         """, unsafe_allow_html=True)
         
-        # Generate the final refined summary
+        # Second phase: Generate detailed study notes using a follow-up OpenAI call
         response = self.client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": final_system_prompt},
-                {"role": "user", "content": final_user_prompt + full_summary}
+                {"role": "system", "content": followup_system_prompt},
+                {"role": "user", "content": followup_user_prompt + initial_summary}
             ],
             max_tokens=2000
         )
-        
         final_summary = response.choices[0].message.content
         
-        # Display the final result
         live_output_placeholder.markdown(f"""
         ## Complete: {title}
         
@@ -272,11 +286,6 @@ def main():
 
     st.markdown(f'<div class="main-header">{header_text}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="info-text">{info_text}</div>', unsafe_allow_html=True)
-
-    # Update other UI text elements accordingly
-    url_placeholder = "https://www.youtube.com/watch?v=example"
-    url_label = "Enter Video URL" if language_code == "en" else "Video-URL eingeben"
-    button_label = "Summarize Video" if language_code == "en" else "Video zusammenfassen"
 
     # Sidebar for API key
     with st.sidebar:
@@ -399,20 +408,28 @@ def main():
 
     with col2:
         st.markdown('<div class="sub-header">Summary Output</div>', unsafe_allow_html=True)
-
-        # Display summary if available
+          # Display summary if available
         if 'summary' in st.session_state:
             st.markdown(f"### {st.session_state.title}")
             st.markdown('<div class="summary-container">', unsafe_allow_html=True)
             st.markdown(st.session_state.summary)
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # Add download option for the summary
+            # Download button for text version
             st.download_button(
-                label="Download Summary",
+                label="Download Summary as Text",
                 data=st.session_state.summary,
                 file_name=f"{st.session_state.title.replace(' ', '_')[:50]}_summary.txt",
                 mime="text/plain"
+            )
+        
+            # Create and download PDF version
+            pdf_bytes = summarizer.create_pdf(st.session_state.summary, st.session_state.title)
+            st.download_button(
+                label="Download Summary as PDF",
+                data=pdf_bytes,
+                file_name=f"{st.session_state.title.replace(' ', '_')[:50]}_summary.pdf",
+                mime="application/pdf"
             )
         else:
             st.info("Enter a video URL and click 'Summarize Video' to generate a summary.")
@@ -421,18 +438,17 @@ def main():
             with st.expander("See example summary"):
                 st.markdown("""
                 # Example Video Title
-                
+            
                 ## Main Concepts
                 * Key concept 1: explanation and details
                 * Key concept 2: explanation and details
-                
+            
                 ## Important Points
                 1. First major point discussed in the video
                 2. Second major point with examples
-                
+            
                 ## Summary
                 A concise overview of the video content...
                 """)
-
 if __name__ == "__main__":
     main()
